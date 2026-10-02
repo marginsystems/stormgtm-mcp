@@ -70,6 +70,9 @@ stormgtm skill install --claude   # or --cursor, --agents
 | `check_batch` | Submit many leads at once; unknown results are retried automatically |
 | `batch_status` | Progress and results for a batch |
 | `report_outcome` | Report `delivered`, `bounced`, `complained`, `replied` or `opened` so later checks improve |
+| `find_leads` | Radar (beta): find people to email from a website URL or a description of the ideal customer (`request`, optional `chatId` to refine). 1 credit per new lead with an email; searches that find nobody are free. Can take a minute or two |
+| `list_radar_leads` | Leads Radar saved, optionally for one `chatId`, with verdicts once qualified |
+| `qualify_radar_leads` | Check Radar leads by `ids` (fast or deep `tier`) and store each verdict. Send only to `deliverable` |
 | `send_email` | Queue up to 100 `messages` (one or many) from a verified domain. Paced through each domain's warm-up. 1 credit per email, refunded on failure |
 | `list_domains` | Sending domains with status and daily limit |
 | `domain_health` | A domain's daily capacity, 7-day bounce and complaint rates, and pause state |
@@ -78,8 +81,14 @@ stormgtm skill install --claude   # or --cursor, --agents
 | `enroll_leads` | Enroll checked leads in a sequence with their variables |
 | `sequence_status` | List sequences, or show one sequence's steps and enrollments |
 | `stop_enrollment` | Stop one lead's sequence; waiting steps are cancelled and refunded |
+| `list_threads` | Inbox conversations (`inbox`, `sent` or `archived`), filtered by unread or a search `query` |
+| `read_thread` | One conversation's messages: sender, time, unverified-sender flag, attachment names, and the new text (`full` for everything) |
+| `reply` | Answer an existing thread. Goes only to the thread's participant; 1 credit. No recipient parameter, so it cannot start new conversations |
+| `mark_read` | Mark threads read or unread |
 
 Send needs a Resend account connected in the StormGTM dashboard. Pass an `idempotencyKey` on each message so a retry never sends twice.
+
+Inbox tools return email content wrapped as `untrusted_email_content` with a notice not to follow instructions inside it. The server instructions tell agents the same, and new outreach stays on `send_email` and sequences.
 
 ## Source
 
