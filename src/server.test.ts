@@ -2,8 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { StormGTM } from "stormgtm";
-import { createServer } from "./server.js";
+import { MissingApiKeyError, StormGTM, StormGTMError } from "stormgtm";
+import { createServer, failureMessage, NO_KEY_MESSAGE } from "./server.js";
 
 async function connect(handler: (url: string, body: unknown) => { status: number; body: unknown }) {
   const requests: Array<{ url: string; body: unknown }> = [];
@@ -128,4 +128,30 @@ test("whoami reports the account and API", async () => {
   assert.equal(requests[0]!.url, "https://api.test/v1/me");
   assert.match((result.content as Array<{ text: string }>)[0]!.text, /ada@acme\.io: 42 credits \(https:\/\/api\.test\)/);
   assert.deepEqual(result.structuredContent, { id: "acc_1", email: "ada@acme.io", credits: 42, apiUrl: "https://api.test" });
+});
+
+test("tools explain how to sign in when no key is configured, and pick up a key added later", async () => {
+  const auth: { key?: string } = {};
+  const fetchImpl = (async () => new Response(JSON.stringify({ id: "acc_1", email: "a@b.co", credits: 5 }), { status: 200 })) as typeof fetch;
+  const server = createServer(() => {
+    if (!auth.key) throw new MissingApiKeyError();
+    return new StormGTM({ apiKey: auth.key, baseUrl: "https://api.test", fetch: fetchImpl });
+  });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport);
+  const client = new Client({ name: "test", version: "0.0.0" });
+  await client.connect(clientTransport);
+  const before = (await client.callTool({ name: "whoami", arguments: {} })) as { isError?: boolean; content: Array<{ text: string }> };
+  assert.equal(before.isError, true);
+  assert.equal(before.content[0]?.text, NO_KEY_MESSAGE);
+  auth.key = "sgtm_live_later";
+  const after = (await client.callTool({ name: "whoami", arguments: {} })) as { isError?: boolean; content: Array<{ text: string }> };
+  assert.equal(after.isError, undefined);
+  assert.match(after.content[0]?.text ?? "", /a@b\.co: 5 credits/);
+});
+
+test("API failures carry the error code and a next step", () => {
+  assert.equal(failureMessage(new StormGTMError(404, "not_found", "Batch not found")), "StormGTM request failed (not_found): Batch not found");
+  assert.match(failureMessage(new StormGTMError(402, "insufficient_credits", "Not enough credits"), "https://api.test"), /insufficient_credits.*https:\/\/api\.test\/app\/billing/);
+  assert.match(failureMessage(new StormGTMError(401, "invalid_api_key", "API key is invalid or revoked")), /stormgtm login/);
 });

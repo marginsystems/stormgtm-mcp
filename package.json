@@ -1,6 +1,6 @@
 {
   "name": "stormgtm-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "StormGTM MCP server — qualify leads with Barometer and send through your own domains, over stdio",
   "license": "MIT",
   "type": "module",
@@ -13,7 +13,7 @@
     "lead-qualification"
   ],
   "bin": {
-    "stormgtm-mcp": "./dist/index.js"
+    "stormgtm-mcp": "dist/index.js"
   },
   "homepage": "https://github.com/marginsystems/stormgtm-mcp",
   "repository": {
@@ -39,7 +39,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.31.0",
-    "stormgtm": "0.1.0",
+    "stormgtm": "0.1.1",
     "zod": "^4.6.5"
   },
   "devDependencies": {

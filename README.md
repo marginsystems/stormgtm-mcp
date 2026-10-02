@@ -37,7 +37,9 @@ Then call `whoami`. It returns the account email and credit balance.
 
 ## Authentication
 
-The server reads `STORMGTM_API_KEY` first, then `~/.stormgtm/config.json` (the same file `stormgtm login` writes). `STORMGTM_API_URL` overrides the API URL (default `https://stormgtm.com`).
+The server reads `STORMGTM_API_KEY` first, then `~/.stormgtm/config.json` (the same file `stormgtm login` writes), on every tool call. `STORMGTM_API_URL` overrides the API URL (default `https://stormgtm.com`).
+
+The server starts without a key. Until you sign in, every tool returns a short message saying how to; after `stormgtm login` the next call works without restarting the server.
 
 ```bash
 npm i -g stormgtm

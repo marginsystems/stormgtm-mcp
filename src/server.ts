@@ -1,5 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StormGTMError, summarize, type StormGTM } from "stormgtm";
+import { describeError, MissingApiKeyError, StormGTMError, summarize, type StormGTM } from "stormgtm";
 import { z } from "zod";
 import { MCP_VERSION } from "./version.js";
 
@@ -56,12 +56,31 @@ function ok(summary: string, data: unknown): ToolResult {
   return { content: [{ type: "text", text: summary }], structuredContent: data as Record<string, unknown> };
 }
 
-function fail(error: unknown): ToolResult {
-  const message = error instanceof StormGTMError ? `${error.code}: ${error.message}` : error instanceof Error ? error.message : String(error);
-  return { content: [{ type: "text", text: message }], isError: true };
+export const NO_KEY_MESSAGE =
+  "StormGTM is not signed in. Run `npx stormgtm login` (or `stormgtm login` if installed globally), or set STORMGTM_API_KEY in this MCP server's environment, then call the tool again.";
+
+export function failureMessage(error: unknown, apiUrl?: string): string {
+  if (error instanceof MissingApiKeyError) return NO_KEY_MESSAGE;
+  if (error instanceof StormGTMError) {
+    const detail = error.status === 401 || error.status === 402 || error.status === 429 ? describeError(error, apiUrl).message : error.message;
+    return `StormGTM request failed (${error.code}): ${detail}`;
+  }
+  return describeError(error, apiUrl).message;
 }
 
-export function createServer(client: StormGTM): McpServer {
+export type ClientSource = StormGTM | (() => StormGTM);
+
+export function createServer(source: ClientSource): McpServer {
+  const api = typeof source === "function" ? source : () => source;
+  const fail = (error: unknown): ToolResult => {
+    let apiUrl: string | undefined;
+    try {
+      apiUrl = api().baseUrl;
+    } catch {
+      apiUrl = undefined;
+    }
+    return { content: [{ type: "text", text: failureMessage(error, apiUrl) }], isError: true };
+  };
   const server = new McpServer({ name: "stormgtm", version: MCP_VERSION }, { instructions: INSTRUCTIONS });
 
   server.registerTool(
@@ -78,7 +97,7 @@ export function createServer(client: StormGTM): McpServer {
     },
     async ({ email, context, tier, policy }) => {
       try {
-        const result = await client.check({ email, context, tier, policy });
+        const result = await api().check({ email, context, tier, policy });
         return ok(summarize(result), result);
       } catch (error) {
         return fail(error);
@@ -99,7 +118,7 @@ export function createServer(client: StormGTM): McpServer {
     },
     async ({ leads, tier, policy }) => {
       try {
-        const created = await client.createBatch({ leads, tier, policy });
+        const created = await api().createBatch({ leads, tier, policy });
         return ok(`Batch ${created.id} queued with ${created.total} leads (up to ${created.maxCredits} credits). Call batch_status with this id.`, created);
       } catch (error) {
         return fail(error);
@@ -120,7 +139,7 @@ export function createServer(client: StormGTM): McpServer {
     },
     async ({ id, offset, limit }) => {
       try {
-        const status = await client.batch(id, { offset, limit: limit ?? 200 });
+        const status = await api().batch(id, { offset, limit: limit ?? 200 });
         const counts: Record<string, number> = {};
         for (const row of status.results) {
           const key = row.result?.verdict ?? row.status;
@@ -148,7 +167,7 @@ export function createServer(client: StormGTM): McpServer {
     },
     async ({ email, kind, detail }) => {
       try {
-        const result = await client.reportOutcome({ email, kind, detail });
+        const result = await api().reportOutcome({ email, kind, detail });
         return ok(result.recorded ? `Recorded ${kind} for ${email}.` : `Not recorded: ${result.rejected.map((r) => r.reason).join(", ")}`, result);
       } catch (error) {
         return fail(error);
@@ -165,6 +184,7 @@ export function createServer(client: StormGTM): McpServer {
     },
     async () => {
       try {
+        const client = api();
         const me = await client.me();
         return ok(`${me.email}: ${me.credits} credits (${client.baseUrl})`, { id: me.id, email: me.email, credits: me.credits, apiUrl: client.baseUrl });
       } catch (error) {
@@ -182,7 +202,7 @@ export function createServer(client: StormGTM): McpServer {
     },
     async () => {
       try {
-        const me = await client.me();
+        const me = await api().me();
         return ok(`${me.credits} credits. fast=${me.pricing.fast}, deep=${me.pricing.deep}, unknown=free. 30d: ${me.usage30d.total} checks.`, me);
       } catch (error) {
         return fail(error);
@@ -215,7 +235,7 @@ export function createServer(client: StormGTM): McpServer {
     },
     async ({ messages }) => {
       try {
-        const result = await client.send(messages);
+        const result = await api().send(messages);
         const lines = [`${result.accepted.length} queued, ${result.rejected.length} rejected.`];
         for (const entry of result.accepted) lines.push(`queued ${entry.id} → ${entry.to}${entry.duplicate ? " (already queued)" : ""}`);
         for (const entry of result.rejected) lines.push(`rejected #${entry.index}: ${entry.code} — ${entry.message}`);
@@ -235,7 +255,7 @@ export function createServer(client: StormGTM): McpServer {
     },
     async () => {
       try {
-        const domains = await client.domains();
+        const domains = await api().domains();
         const lines = domains.length
           ? domains.map((domain) => `${domain.name} (${domain.id}): ${domain.status}, ${domain.warmup.paused ? "paused" : `${domain.warmup.dailyCap}/day`}`)
           : ["No sending domains yet. Add one in the StormGTM dashboard."];
@@ -255,7 +275,7 @@ export function createServer(client: StormGTM): McpServer {
     },
     async ({ id }) => {
       try {
-        const health = await client.domainHealth(id);
+        const health = await api().domainHealth(id);
         const pct = (value: number) => `${(value * 100).toFixed(1)}%`;
         const state = health.warmup.paused ? `paused (${health.warmup.pausedReason ?? "manual"})` : `${health.warmup.remainingToday}/${health.warmup.dailyCap} left today`;
         return ok(`${health.name}: ${state}. 7d: ${health.last7Days.sent} sent, ${pct(health.last7Days.bounceRate)} bounced, ${pct(health.last7Days.complaintRate)} complaints.`, health);
@@ -274,7 +294,7 @@ export function createServer(client: StormGTM): McpServer {
     },
     async ({ id }) => {
       try {
-        const email = await client.email(id);
+        const email = await api().email(id);
         return ok(`${email.id} → ${email.to}: ${email.status}, delivery ${email.delivery}${email.error ? ` (${email.error})` : ""}`, email);
       } catch (error) {
         return fail(error);
@@ -300,7 +320,7 @@ export function createServer(client: StormGTM): McpServer {
     },
     async ({ name, from, replyTo, steps }) => {
       try {
-        const sequence = await client.createSequence({ name, from, replyTo, steps });
+        const sequence = await api().createSequence({ name, from, replyTo, steps });
         const variables = sequence.variables.length ? ` Leads need: ${sequence.variables.join(", ")}.` : "";
         return ok(`Created sequence ${sequence.id} "${sequence.name}" with ${sequence.steps.length} steps.${variables} Enroll leads with enroll_leads.`, sequence);
       } catch (error) {
@@ -324,7 +344,7 @@ export function createServer(client: StormGTM): McpServer {
     },
     async ({ sequenceId, leads }) => {
       try {
-        const result = await client.enroll(sequenceId, leads);
+        const result = await api().enroll(sequenceId, leads);
         const fresh = result.accepted.filter((entry) => !entry.duplicate).length;
         const lines = [`${fresh} enrolled, ${result.accepted.length - fresh} already enrolled, ${result.rejected.length} rejected. Up to ${result.maxCredits} credits.`];
         for (const entry of result.rejected.slice(0, 50)) lines.push(`rejected #${entry.index}: ${entry.code} — ${entry.message}`);
@@ -345,13 +365,13 @@ export function createServer(client: StormGTM): McpServer {
     async ({ id }) => {
       try {
         if (!id) {
-          const sequences = await client.sequences();
+          const sequences = await api().sequences();
           const lines = sequences.length
             ? sequences.map((entry) => `${entry.id} "${entry.name}"${entry.archivedAt ? " (archived)" : ""}: ${entry.steps} steps, ${entry.counts.active} active, ${entry.counts.completed} completed, ${entry.counts.stopped} stopped`)
             : ["No sequences yet. Create one with create_sequence."];
           return ok(lines.join("\n"), { sequences });
         }
-        const [sequence, enrollments] = await Promise.all([client.sequence(id), client.enrollments(id, 100)]);
+        const [sequence, enrollments] = await Promise.all([api().sequence(id), api().enrollments(id, 100)]);
         const lines = [`${sequence.id} "${sequence.name}" from ${sequence.from}: ${sequence.steps.length} steps`];
         for (const entry of enrollments.slice(0, 50)) lines.push(`${entry.email}: ${entry.status}${entry.stopReason ? ` (${entry.stopReason})` : entry.nextStep !== null ? `, step ${entry.nextStep + 1} next` : ""}`);
         return ok(lines.join("\n"), { sequence, enrollments });
@@ -370,7 +390,7 @@ export function createServer(client: StormGTM): McpServer {
     },
     async ({ sequenceId, enrollmentId }) => {
       try {
-        const result = await client.stopEnrollment(sequenceId, enrollmentId);
+        const result = await api().stopEnrollment(sequenceId, enrollmentId);
         return ok(`Stopped ${result.id}.`, result);
       } catch (error) {
         return fail(error);
