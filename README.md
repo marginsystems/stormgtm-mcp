@@ -81,10 +81,13 @@ stormgtm skill install --claude   # or --cursor, --agents
 | `enroll_leads` | Enroll checked leads in a sequence with their variables |
 | `sequence_status` | List sequences, or show one sequence's steps and enrollments |
 | `stop_enrollment` | Stop one lead's sequence; waiting steps are cancelled and refunded |
-| `list_threads` | Inbox conversations (`inbox`, `sent` or `archived`), filtered by unread or a search `query` |
+| `list_threads` | Inbox conversations (`inbox`, `sent`, `archived` or `spam`), filtered by unread or a search `query` |
 | `read_thread` | One conversation's messages: sender, time, unverified-sender flag, attachment names, and the new text (`full` for everything) |
 | `reply` | Answer an existing thread. Goes only to the thread's participant; 1 credit. No recipient parameter, so it cannot start new conversations |
 | `mark_read` | Mark threads read or unread |
+| `archive_threads` | Archive threads, or move them back to the inbox with `archived: false` |
+| `mark_spam` | Move threads to spam, or back with `spam: false`. Marking spam also suppresses the sender and stops their sequences |
+| `inbox_counts` | Total and unread threads per folder |
 
 Send needs a Resend account connected in the StormGTM dashboard. Pass an `idempotencyKey` on each message so a retry never sends twice.
 
