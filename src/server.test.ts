@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { MissingApiKeyError, StormGTM, StormGTMError } from "stormgtm";
-import { createServer, failureMessage, INSTRUCTIONS, NO_KEY_MESSAGE, UNTRUSTED_NOTICE } from "./server.js";
+import { createServer, failureMessage, INSTRUCTIONS, MAILBOX_NOTICE, NO_KEY_MESSAGE, UNTRUSTED_NOTICE } from "./server.js";
 
 async function connect(handler: (url: string, body: unknown) => { status: number; body: unknown }) {
   const requests: Array<{ url: string; body: unknown }> = [];
@@ -40,20 +40,27 @@ test("lists the agent tools with instructions", async () => {
   const { client } = await connect(() => ({ status: 200, body: {} }));
   const tools = await client.listTools();
   assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [
+    "add_leads",
     "archive_threads",
     "batch_status",
     "check_batch",
     "check_lead",
+    "connect_leadsforge",
     "create_sequence",
     "credits",
+    "disconnect_leadsforge",
     "domain_health",
     "email_status",
     "enroll_leads",
     "find_leads",
     "inbox_counts",
+    "leadsforge_status",
     "list_domains",
+    "list_mailboxes",
     "list_radar_leads",
     "list_threads",
+    "mailbox_domains",
+    "mailbox_status",
     "mark_read",
     "mark_spam",
     "qualify_radar_leads",
@@ -123,6 +130,32 @@ test("domain tools summarize capacity and health", async () => {
   assert.match((list.content as Array<{ text: string }>)[0]!.text, /mail\.acme\.io \(d_1\): verified, 40\/day/);
   const health = await client.callTool({ name: "domain_health", arguments: { id: "d_1" } });
   assert.match((health.content as Array<{ text: string }>)[0]!.text, /30\/40 left today.*1\.0% bounced/);
+});
+
+test("list_domains directs mailbox setup without suggesting sending is unavailable", async () => {
+  const { client } = await connect(() => ({ status: 200, body: { domains: [] } }));
+  const list = await client.callTool({ name: "list_domains", arguments: {} });
+  const text = (list.content as Array<{ text: string }>)[0]!.text;
+  assert.match(text, /Connect a mailbox in the StormGTM dashboard at \/app\/mailboxes/);
+  assert.doesNotMatch(text, /coming soon/i);
+});
+
+test("mailbox tools summarize status and capacity", async () => {
+  const mailbox = {
+    id: "mbx_1",
+    address: "ada@acme.io",
+    status: "error",
+    lastError: "mailbox_auth_failed",
+    lastTestAt: "2026-10-03T00:00:00.000Z",
+    pausedReason: null,
+    caps: { dailyCap: 10, sentToday: 0 },
+  };
+  const { client, requests } = await connect((url) => ({ status: 200, body: url.endsWith("/v1/mailboxes") ? { mailboxes: [mailbox] } : mailbox }));
+  const list = await client.callTool({ name: "list_mailboxes", arguments: {} });
+  assert.match((list.content as Array<{ text: string }>)[0]!.text, /ada@acme\.io \(mbx_1\): connection failing \(mailbox_auth_failed\), 0\/10 sent today/);
+  const status = await client.callTool({ name: "mailbox_status", arguments: { id: "mbx_1" } });
+  assert.match((status.content as Array<{ text: string }>)[0]!.text, /Last tested 2026-10-03/);
+  assert.ok(requests.some((request) => request.url === "https://api.test/v1/mailboxes/mbx_1"));
 });
 
 test("tool descriptions do not expose internals", async () => {
@@ -328,4 +361,46 @@ test("instructions cover the inbox safety rules", () => {
   assert.match(INSTRUCTIONS, /costs 1 credit/);
   assert.match(INSTRUCTIONS, /Use send_email or a sequence for new outreach/);
   assert.match(INSTRUCTIONS, /mark_spam[^\n]*suppresses the sender/);
+});
+
+test("sending tools send from connected mailboxes and explain the unsubscribe host", async () => {
+  assert.match(INSTRUCTIONS, /Emails go out from the mailboxes in list_mailboxes/);
+  assert.match(INSTRUCTIONS, /\/app\/mailboxes/);
+  assert.match(INSTRUCTIONS, /unsubscribe_host_required/);
+  assert.doesNotMatch(INSTRUCTIONS, /list_domains|domain_health|coming soon|needs a Resend account/);
+  const { client } = await connect(() => ({ status: 200, body: {} }));
+  const { tools } = await client.listTools();
+  for (const name of ["send_email", "list_domains", "domain_health", "create_sequence", "enroll_leads"]) {
+    const description = tools.find((tool) => tool.name === name)?.description ?? "";
+    assert.ok(description.startsWith(MAILBOX_NOTICE), name);
+    assert.doesNotMatch(description, /your (verified )?Resend domains|Resend sending domains|coming soon/, name);
+  }
+  for (const name of ["send_email", "create_sequence"]) {
+    const description = tools.find((tool) => tool.name === name)?.description ?? "";
+    assert.match(description, /unsubscribe_host_required/, name);
+    assert.match(description, /mailboxId/, name);
+  }
+});
+
+test("send_email and create_sequence pass the mailbox through", async () => {
+  const { client, requests } = await connect((url) => ({ status: 200, body: url.endsWith("/sequences") ? { id: "seq_1", name: "Intro", variables: [], steps: [{}] } : { accepted: [], rejected: [] } }));
+  await client.callTool({ name: "send_email", arguments: { messages: [{ mailboxId: "mbx_1", to: "bob@globex.com", subject: "Hi", text: "Hello" }] } });
+  await client.callTool({ name: "create_sequence", arguments: { name: "Intro", mailboxId: "mbx_1", steps: [{ delayHours: 0, subject: "Hi", text: "Hello" }] } });
+  const bodies = requests.filter((request) => request.url.includes("/v1/send/")).map((request) => request.body);
+  assert.deepEqual(bodies, [
+    { messages: [{ mailboxId: "mbx_1", to: "bob@globex.com", subject: "Hi", text: "Hello" }] },
+    { name: "Intro", mailboxId: "mbx_1", steps: [{ delayHours: 0, subject: "Hi", text: "Hello" }] },
+  ]);
+});
+
+test("mailbox_domains summarizes each unsubscribe host", async () => {
+  const domains = [
+    { domain: "acme.io", mailboxes: 2, unsubscribeHost: "u.acme.io", verified: true, verifiedAt: "2026-10-03T00:00:00.000Z", record: null },
+    { domain: "globex.com", mailboxes: 1, unsubscribeHost: "u.globex.com", verified: false, verifiedAt: null, record: null },
+    { domain: "initech.io", mailboxes: 1, unsubscribeHost: null, verified: false, verifiedAt: null, record: null },
+  ];
+  const { client, requests } = await connect(() => ({ status: 200, body: { domains } }));
+  const result = await client.callTool({ name: "mailbox_domains", arguments: {} });
+  assert.equal((result.content as Array<{ text: string }>)[0]!.text, "acme.io: u.acme.io verified\nglobex.com: u.globex.com waiting for DNS\ninitech.io: unsubscribe host not set");
+  assert.ok(requests.some((request) => request.url === "https://api.test/v1/mailboxes/domains"));
 });

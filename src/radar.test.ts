@@ -15,6 +15,7 @@ const lead: RadarLead = {
   companyHost: "acme.io",
   sourceUrl: "https://acme.io/team",
   note: null,
+  origin: "web",
   verdict: null,
   checkId: null,
   createdAt: "2026-10-02T00:00:00.000Z",
@@ -120,4 +121,37 @@ test("instructions send agents from Radar through qualification before sending",
   assert.match(INSTRUCTIONS, /qualify_radar_leads/);
   assert.match(INSTRUCTIONS, /list_radar_leads/);
   assert.match(INSTRUCTIONS, /send only to the ones that come back "deliverable"/);
+});
+
+test("add_leads saves the user's own leads and reports duplicates and rejections", async () => {
+  const { client, requests } = await connect(() =>
+    new Response(JSON.stringify({ leads: [{ ...lead, origin: "manual" }], duplicates: ["bo@acme.io"], rejected: [{ index: 2, code: "invalid_email", message: "Not a valid email address" }] }), { status: 201 }),
+  );
+  const result = await client.callTool({ name: "add_leads", arguments: { leads: [{ email: "jane@acme.io", name: "Jane Doe" }, { email: "bo@acme.io" }, { email: "nope" }] } });
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(requests.map((request) => `${request.method} ${request.url}`), ["POST https://api.test/v1/radar/leads"]);
+  assert.deepEqual(requests[0]!.body, { leads: [{ email: "jane@acme.io", name: "Jane Doe" }, { email: "bo@acme.io" }, { email: "nope" }] });
+  assert.match(text(result), /^Added 1 lead, free\.\nrld_1 jane@acme\.io {2}Jane Doe · CTO · Acme\nAlready saved: bo@acme\.io\nRejected nope: Not a valid email address/);
+});
+
+test("Leadsforge tools show status, connect with a key, and disconnect", async () => {
+  const { client, requests } = await connect((method) => {
+    if (method === "GET") return new Response(JSON.stringify({ leadsforge: { connected: false } }));
+    if (method === "PUT") return new Response(JSON.stringify({ leadsforge: { connected: true, keyHint: "…1234", credits: 100 } }));
+    return new Response(JSON.stringify({ ok: true }));
+  });
+  assert.match(text(await client.callTool({ name: "leadsforge_status", arguments: {} })), /not connected/);
+  const connected = await client.callTool({ name: "connect_leadsforge", arguments: { apiKey: "lf_live_key_1234" } });
+  assert.match(text(connected), /Leadsforge connected \(key …1234\) with 100 Leadsforge credits/);
+  assert.equal(JSON.stringify(connected).includes("lf_live_key_1234"), false);
+  assert.match(text(await client.callTool({ name: "disconnect_leadsforge", arguments: {} })), /disconnected/);
+  assert.deepEqual(requests.map((request) => `${request.method} ${request.url}`), ["GET https://api.test/v1/radar/leadsforge", "PUT https://api.test/v1/radar/leadsforge", "DELETE https://api.test/v1/radar/leadsforge"]);
+  assert.deepEqual(requests[1]!.body, { apiKey: "lf_live_key_1234" });
+});
+
+test("list_radar_leads marks leads that did not come from the web", async () => {
+  const { client } = await connect(() => new Response(JSON.stringify({ leads: [lead, { ...lead, id: "rld_2", email: "cto@initech.io", origin: "leadsforge" }] })));
+  const result = await client.callTool({ name: "list_radar_leads", arguments: {} });
+  assert.equal(text(result).split("\n")[1], "rld_2 cto@initech.io  Jane Doe · CTO · Acme (leadsforge)");
+  assert.equal(text(result).split("\n")[0]!.includes("(web)"), false);
 });
