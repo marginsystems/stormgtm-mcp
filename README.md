@@ -69,7 +69,7 @@ stormgtm skill install --claude   # or --cursor, --agents
 | `check_lead` | Review one address: verdict, 0-100 score, reasons, policy result. Fast tier 1 credit, deep tier 5, unknown free |
 | `check_batch` | Submit many leads at once; unknown results are retried automatically |
 | `batch_status` | Progress and results for a batch |
-| `report_outcome` | Report `delivered`, `bounced`, `complained`, `replied` or `opened` so later checks improve |
+| `report_outcome` | Report `delivered`, `bounced`, `complained`, `replied` or `opened` so later checks improve. Free, and works for email sent outside StormGTM |
 | `find_leads` | Radar (beta): find people to email from a website URL or a description of the ideal customer (`request`, optional `chatId` to refine). 1 credit per new lead found on the web; Leadsforge leads and searches that find nobody are free. Can take a minute or two |
 | `list_radar_leads` | Leads Radar saved, optionally for one `chatId`, with verdicts once qualified |
 | `add_leads` | Save up to 500 of your own `leads` (email, optional name, title, company, note), free. Returns new leads, duplicates and rejections |

@@ -119,7 +119,10 @@ function messageView(message: InboxMessage, full: boolean) {
 
 function mailboxSummary(mailbox: Mailbox): string {
   const state = mailbox.status === "error" ? `connection failing (${mailbox.lastError ?? "test failed"})` : mailbox.status;
-  return `${mailbox.address} (${mailbox.id}): ${state}, ${mailbox.caps.sentToday}/${mailbox.caps.dailyCap} sent today`;
+  const { caps } = mailbox;
+  const waiting = mailbox.status === "active" && caps.dailyCapOverride !== 0 && caps.dailyCap === 0 && caps.nextStepAt && caps.nextDailyCap;
+  const warming = mailbox.phase === "warming_up" && mailbox.warmup?.day ? `warming up (day ${mailbox.warmup.day} of 14; one-off cold sends are rejected, replies still go out), ` : "";
+  return `${mailbox.address} (${mailbox.id}): ${state}, ${warming}${waiting ? `no cold sends until ${caps.nextStepAt!.slice(0, 10)}, then ${caps.nextDailyCap} a day` : `${caps.sentToday}/${caps.dailyCap} sent today`}`;
 }
 
 function mailboxDomainSummary(domain: MailboxDomain): string {
@@ -233,7 +236,7 @@ export function createServer(source: ClientSource): McpServer {
     "report_outcome",
     {
       title: "Report an outcome",
-      description: "Tell stormgtm what happened after sending: bounced, delivered, replied, opened, or complained. Bounces make future checks of that address undeliverable.",
+      description: "Tell stormgtm what happened after sending: bounced, delivered, replied, opened, or complained. Free, and works for any address whether the email went out through StormGTM or by other means. Bounces make future checks of that address undeliverable.",
       inputSchema: {
         email: z.string(),
         kind: z.enum(["delivered", "bounced", "complained", "replied", "opened"]),
@@ -243,7 +246,8 @@ export function createServer(source: ClientSource): McpServer {
     async ({ email, kind, detail }) => {
       try {
         const result = await api().reportOutcome({ email, kind, detail });
-        return ok(result.recorded ? `Recorded ${kind} for ${email}.` : `Not recorded: ${result.rejected.map((r) => r.reason).join(", ")}`, result);
+        if (result.recorded) return ok(`Recorded ${kind} for ${email}.`, result);
+        return { ...ok(`Not recorded: ${email} is not a valid email address.`, result), isError: true };
       } catch (error) {
         return fail(error);
       }

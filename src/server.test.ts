@@ -76,6 +76,19 @@ test("lists the agent tools with instructions", async () => {
   assert.match(client.getInstructions() ?? "", /stormgtm skill install --claude/);
 });
 
+test("report_outcome records with the detail and flags an address that was not recorded", async () => {
+  const { client, requests } = await connect((_url, body) => {
+    const valid = (body as { email: string }).email.includes("@");
+    return { status: 200, body: { recorded: valid ? 1 : 0, rejected: valid ? [] : [{ email: "nope", reason: "invalid_email" }] } };
+  });
+  const recorded = await client.callTool({ name: "report_outcome", arguments: { email: "jane@acme.io", kind: "bounced", detail: "550 no such user" } });
+  assert.deepEqual(requests[0], { url: "https://api.test/v1/outcomes", body: { email: "jane@acme.io", kind: "bounced", detail: "550 no such user" } });
+  assert.equal(recorded.isError, undefined);
+  const rejected = await client.callTool({ name: "report_outcome", arguments: { email: "nope", kind: "bounced" } });
+  assert.equal(rejected.isError, true);
+  assert.equal((rejected.content as Array<{ text: string }>)[0]!.text, "Not recorded: nope is not a valid email address.");
+});
+
 test("check_lead forwards context and returns a summary plus structured result", async () => {
   const { client, requests } = await connect(() => ({ status: 200, body: deliverable }));
   const result = await client.callTool({ name: "check_lead", arguments: { email: "jane@acme.io", context: { name: "Jane Doe" }, tier: "deep" } });
@@ -156,6 +169,43 @@ test("mailbox tools summarize status and capacity", async () => {
   const status = await client.callTool({ name: "mailbox_status", arguments: { id: "mbx_1" } });
   assert.match((status.content as Array<{ text: string }>)[0]!.text, /Last tested 2026-10-03/);
   assert.ok(requests.some((request) => request.url === "https://api.test/v1/mailboxes/mbx_1"));
+});
+
+test("mailbox tools say when a mailbox is warming up and that one-off cold sends are rejected", async () => {
+  const mailbox = {
+    id: "mbx_1",
+    address: "ada@acme.io",
+    status: "active",
+    lastError: null,
+    lastTestAt: null,
+    pausedReason: null,
+    phase: "warming_up",
+    warmup: { enabled: true, dailyTarget: 3, day: 4, coldSendsStartAt: "2026-10-17T00:00:00.000Z" },
+    caps: { dailyCap: 0, dailyCapOverride: null, sentToday: 0, nextDailyCap: 10, nextStepAt: "2026-10-17T00:00:00.000Z" },
+  };
+  const { client } = await connect(() => ({ status: 200, body: { mailboxes: [mailbox] } }));
+  const list = await client.callTool({ name: "list_mailboxes", arguments: {} });
+  assert.equal(
+    (list.content as Array<{ text: string }>)[0]!.text,
+    "ada@acme.io (mbx_1): active, warming up (day 4 of 14; one-off cold sends are rejected, replies still go out), no cold sends until 2026-10-17, then 10 a day",
+  );
+});
+
+test("mailbox tools do not report a future ramp for a zero daily-cap override", async () => {
+  const mailbox = {
+    id: "mbx_1",
+    address: "ada@acme.io",
+    status: "active",
+    lastError: null,
+    lastTestAt: "2026-10-03T00:00:00.000Z",
+    pausedReason: null,
+    caps: { dailyCap: 0, dailyCapOverride: 0, sentToday: 0, nextDailyCap: 10, nextStepAt: "2026-10-17T00:00:00.000Z" },
+  };
+  const { client } = await connect((url) => ({ status: 200, body: url.endsWith("/v1/mailboxes") ? { mailboxes: [mailbox] } : mailbox }));
+  const list = await client.callTool({ name: "list_mailboxes", arguments: {} });
+  const status = await client.callTool({ name: "mailbox_status", arguments: { id: "mbx_1" } });
+  assert.equal((list.content as Array<{ text: string }>)[0]!.text, "ada@acme.io (mbx_1): active, 0/0 sent today");
+  assert.equal((status.content as Array<{ text: string }>)[0]!.text, "ada@acme.io (mbx_1): active, 0/0 sent today. Last tested 2026-10-03T00:00:00.000Z.");
 });
 
 test("tool descriptions do not expose internals", async () => {
