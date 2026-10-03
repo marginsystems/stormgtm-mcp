@@ -121,6 +121,7 @@ test("instructions send agents from Radar through qualification before sending",
   assert.match(INSTRUCTIONS, /qualify_radar_leads/);
   assert.match(INSTRUCTIONS, /list_radar_leads/);
   assert.match(INSTRUCTIONS, /send only to the ones that come back "deliverable"/);
+  assert.match(INSTRUCTIONS, /cursor is account-wide; if you filter with chatId, use the same chatId on every page and next run/);
 });
 
 test("add_leads saves the user's own leads and reports duplicates and rejections", async () => {
@@ -147,6 +148,19 @@ test("Leadsforge tools show status, connect with a key, and disconnect", async (
   assert.match(text(await client.callTool({ name: "disconnect_leadsforge", arguments: {} })), /disconnected/);
   assert.deepEqual(requests.map((request) => `${request.method} ${request.url}`), ["GET https://api.test/v1/radar/leadsforge", "PUT https://api.test/v1/radar/leadsforge", "DELETE https://api.test/v1/radar/leadsforge"]);
   assert.deepEqual(requests[1]!.body, { apiKey: "lf_live_key_1234" });
+});
+
+test("list_radar_leads with after takes only new leads and returns the next cursor", async () => {
+  const { client, requests } = await connect((_method, url) => new Response(JSON.stringify(url.includes("after=0") ? { leads: [lead], nextAfter: "1.rld_1" } : { leads: [], nextAfter: "1.rld_1" })));
+  const first = await client.callTool({ name: "list_radar_leads", arguments: { after: "0", limit: 50 } });
+  assert.equal(requests[0]!.url, "https://api.test/v1/radar/leads?after=0&limit=50");
+  assert.equal(text(first), "rld_1 jane@acme.io  Jane Doe · CTO · Acme\nnextAfter: 1.rld_1");
+  assert.equal((first.structuredContent as { nextAfter: string }).nextAfter, "1.rld_1");
+  const idle = await client.callTool({ name: "list_radar_leads", arguments: { after: "1.rld_1" } });
+  assert.equal(text(idle), "No new leads.\nnextAfter: 1.rld_1");
+  const tools = await client.listTools();
+  const listTool = tools.tools.find((tool) => tool.name === "list_radar_leads");
+  assert.match(listTool?.description ?? "", /cursor is account-wide.*same chatId for every page and next run/);
 });
 
 test("list_radar_leads marks leads that did not come from the web", async () => {

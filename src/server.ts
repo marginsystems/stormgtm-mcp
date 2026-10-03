@@ -17,6 +17,7 @@ Radar (finding leads, beta):
 - When the account has Leadsforge connected (leadsforge_status), find_leads also searches the Leadsforge people database by role, company and tech stack. Leads found there are free in StormGTM and use the account's own Leadsforge credits. connect_leadsforge takes a Leadsforge API key; only use a key the user gives you for that purpose.
 - add_leads saves leads the user already has (up to 500 per call), free. Use it for lists from a CRM, a CSV or a conversation, then qualify them like any other lead.
 - Radar leads are not checked yet. Call qualify_radar_leads (or check_lead) on them, and send only to the ones that come back "deliverable". list_radar_leads shows leads saved earlier and where each came from (web, leadsforge, manual).
+- Leads only: finding, listing and qualifying leads need no connected mailbox. To take leads out and send them by the user's own means, call list_radar_leads with after "0", then with each nextAfter until no leads come back, and keep the last nextAfter for the next run so it returns only new leads. The cursor is account-wide; if you filter with chatId, use the same chatId on every page and next run. Afterwards call report_outcome for bounces, complaints and replies; it is free and works for email sent outside StormGTM.
 
 Mailboxes:
 - list_mailboxes shows the mailboxes connected for sending and mailbox_status shows one. A person connects mailboxes and enters their passwords in the StormGTM dashboard; never ask for mailbox passwords. A mailbox with status "error" needs its details fixed in the dashboard.
@@ -731,13 +732,23 @@ export function createServer(source: ClientSource): McpServer {
     "list_radar_leads",
     {
       title: "List Radar leads",
-      description: "Leads Radar saved earlier, newest first, with their verdict once qualified. Pass a chatId for one search only.",
-      inputSchema: { chatId: z.string().optional().describe("chatId from find_leads") },
+      description:
+        'Leads saved earlier (found by Radar or added), newest first, with their verdict once qualified. Pass a chatId for one search only. To take only leads you have not seen yet, pass after: "0" the first time, then the nextAfter value from the previous call; those come back oldest first, up to limit per call, so call again until none are left and keep nextAfter for the next run. The cursor is account-wide; if you use chatId, keep using the same chatId for every page and next run.',
+      inputSchema: {
+        chatId: z.string().optional().describe("chatId from find_leads"),
+        after: z.string().optional().describe('"0" to start from the first lead, or nextAfter from an earlier call'),
+        limit: z.number().int().min(1).max(500).optional().describe("With after: leads per call, default 100"),
+      },
     },
-    async ({ chatId }) => {
+    async ({ chatId, after, limit }) => {
       try {
+        if (after !== undefined) {
+          const page = await api().radarLeadsAfter({ after, chatId, limit });
+          const lines = [...(page.leads.length ? page.leads.map(storedLeadLine) : ["No new leads."]), `nextAfter: ${page.nextAfter}`];
+          return ok(lines.join("\n"), page);
+        }
         const leads = await api().radarLeads({ chatId });
-        const lines = leads.length ? leads.map((lead) => `${lead.id} ${radarLeadLine(lead)}${lead.verdict ? ` [${lead.verdict}]` : ""}${lead.origin && lead.origin !== "web" ? ` (${lead.origin})` : ""}`) : ["No Radar leads yet. Find some with find_leads or add your own with add_leads."];
+        const lines = leads.length ? leads.map(storedLeadLine) : ["No Radar leads yet. Find some with find_leads or add your own with add_leads."];
         return ok(lines.join("\n"), { leads });
       } catch (error) {
         return fail(error);
@@ -854,6 +865,10 @@ export function createServer(source: ClientSource): McpServer {
   );
 
   return server;
+}
+
+function storedLeadLine(lead: RadarLead): string {
+  return `${lead.id} ${radarLeadLine(lead)}${lead.verdict ? ` [${lead.verdict}]` : ""}${lead.origin && lead.origin !== "web" ? ` (${lead.origin})` : ""}`;
 }
 
 function radarLeadLine(lead: Pick<RadarLead, "email" | "name" | "title" | "company">): string {
