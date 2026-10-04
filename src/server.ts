@@ -13,10 +13,9 @@ export const INSTRUCTIONS = `stormgtm reviews email leads for deliverability bef
 - After sending, call report_outcome for bounces and replies so future checks improve.
 
 Radar (finding leads, beta):
-- find_leads takes a website URL or a description of the ideal customer and returns people with emails. It can take a minute or two. Each new lead found on the web costs 1 credit; searches that find nobody are free. Pass the chatId back to refine the same search.
-- When the account has Leadsforge connected (leadsforge_status), find_leads also searches the Leadsforge people database by role, company and tech stack. Leads found there are free in StormGTM and use the account's own Leadsforge credits. connect_leadsforge takes a Leadsforge API key; only use a key the user gives you for that purpose.
+- find_leads takes a website URL or a description of the ideal customer and returns people with emails. It can take a minute or two. Each new lead costs 1 credit; searches that find nobody are free. A search needs at least 1 credit to start. Pass the chatId back to refine the same search.
 - add_leads saves leads the user already has (up to 500 per call), free. Use it for lists from a CRM, a CSV or a conversation, then qualify them like any other lead.
-- Radar leads are not checked yet. Call qualify_radar_leads (or check_lead) on them, and send only to the ones that come back "deliverable". list_radar_leads shows leads saved earlier and where each came from (web, leadsforge, manual).
+- Radar leads are not checked yet. Call qualify_radar_leads (or check_lead) on them, and send only to the ones that come back "deliverable". list_radar_leads shows leads saved earlier and where each came from (web, manual).
 - Leads only: finding, listing and qualifying leads need no connected mailbox. To take leads out and send them by the user's own means, call list_radar_leads with after "0", then with each nextAfter until no leads come back, and keep the last nextAfter for the next run so it returns only new leads. The cursor is account-wide; if you filter with chatId, use the same chatId on every page and next run. Afterwards call report_outcome for bounces, complaints and replies; it is free and works for email sent outside StormGTM.
 
 Mailboxes:
@@ -709,7 +708,7 @@ export function createServer(source: ClientSource): McpServer {
     {
       title: "Find leads",
       description:
-        "Find people to email from a website URL or a description of the ideal customer. Reads the site and searches the web (and the Leadsforge people database when connected), then returns the new leads it saved (email, name, title, company, source page) and a short answer. 1 credit per new lead found on the web; Leadsforge leads are free; searches that find nobody are free. Can take a minute or two. Qualify the leads before sending.",
+        "Find people to email from a website URL or a description of the ideal customer. Reads the site and searches the web, then returns the new leads it saved (email, name, title, company, source page) and a short answer. 1 credit per new lead; searches that find nobody are free. Can take a minute or two. Qualify the leads before sending.",
       inputSchema: {
         request: z.string().trim().min(1).max(4000).describe("A website URL, or a description of the ideal customer"),
         chatId: z.string().optional().describe("chatId from an earlier find_leads call, to refine that search"),
@@ -791,58 +790,6 @@ export function createServer(source: ClientSource): McpServer {
   );
 
   server.registerTool(
-    "leadsforge_status",
-    {
-      title: "Leadsforge status",
-      description: "Whether a Leadsforge account is connected. When it is, find_leads also searches the Leadsforge people database and those leads are free in StormGTM.",
-      inputSchema: {},
-    },
-    async () => {
-      try {
-        const status = await api().leadsforge();
-        return ok(status.connected ? `Leadsforge connected (key ${status.keyHint ?? "saved"}).` : "Leadsforge is not connected. Connect it with connect_leadsforge or in the Radar page of the dashboard.", status);
-      } catch (error) {
-        return fail(error);
-      }
-    },
-  );
-
-  server.registerTool(
-    "connect_leadsforge",
-    {
-      title: "Connect Leadsforge",
-      description: "Connect the user's Leadsforge account with their Leadsforge API key (Leadsforge → Usage → API & MCP). The key is checked with Leadsforge, stored encrypted and never shown again. Only use a key the user gave you for this.",
-      inputSchema: { apiKey: z.string().trim().min(8).max(512).describe("The user's Leadsforge API key") },
-    },
-    async ({ apiKey }) => {
-      try {
-        const status = await api().connectLeadsforge(apiKey);
-        const credits = status.credits === undefined ? "" : ` with ${status.credits} Leadsforge credits`;
-        return ok(`Leadsforge connected (key ${status.keyHint ?? "saved"})${credits}. find_leads now also searches the Leadsforge people database.`, status);
-      } catch (error) {
-        return fail(error);
-      }
-    },
-  );
-
-  server.registerTool(
-    "disconnect_leadsforge",
-    {
-      title: "Disconnect Leadsforge",
-      description: "Remove the account's Leadsforge key. find_leads goes back to web search only.",
-      inputSchema: {},
-    },
-    async () => {
-      try {
-        await api().disconnectLeadsforge();
-        return ok("Leadsforge disconnected.", { connected: false });
-      } catch (error) {
-        return fail(error);
-      }
-    },
-  );
-
-  server.registerTool(
     "qualify_radar_leads",
     {
       title: "Qualify Radar leads",
@@ -868,7 +815,7 @@ export function createServer(source: ClientSource): McpServer {
 }
 
 function storedLeadLine(lead: RadarLead): string {
-  return `${lead.id} ${radarLeadLine(lead)}${lead.verdict ? ` [${lead.verdict}]` : ""}${lead.origin && lead.origin !== "web" ? ` (${lead.origin})` : ""}`;
+  return `${lead.id} ${radarLeadLine(lead)}${lead.verdict ? ` [${lead.verdict}]` : ""}${lead.origin === "manual" ? " (manual)" : ""}`;
 }
 
 function radarLeadLine(lead: Pick<RadarLead, "email" | "name" | "title" | "company">): string {

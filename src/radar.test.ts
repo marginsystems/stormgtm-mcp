@@ -135,19 +135,13 @@ test("add_leads saves the user's own leads and reports duplicates and rejections
   assert.match(text(result), /^Added 1 lead, free\.\nrld_1 jane@acme\.io {2}Jane Doe · CTO · Acme\nAlready saved: bo@acme\.io\nRejected nope: Not a valid email address/);
 });
 
-test("Leadsforge tools show status, connect with a key, and disconnect", async () => {
-  const { client, requests } = await connect((method) => {
-    if (method === "GET") return new Response(JSON.stringify({ leadsforge: { connected: false } }));
-    if (method === "PUT") return new Response(JSON.stringify({ leadsforge: { connected: true, keyHint: "…1234", credits: 100 } }));
-    return new Response(JSON.stringify({ ok: true }));
-  });
-  assert.match(text(await client.callTool({ name: "leadsforge_status", arguments: {} })), /not connected/);
-  const connected = await client.callTool({ name: "connect_leadsforge", arguments: { apiKey: "lf_live_key_1234" } });
-  assert.match(text(connected), /Leadsforge connected \(key …1234\) with 100 Leadsforge credits/);
-  assert.equal(JSON.stringify(connected).includes("lf_live_key_1234"), false);
-  assert.match(text(await client.callTool({ name: "disconnect_leadsforge", arguments: {} })), /disconnected/);
-  assert.deepEqual(requests.map((request) => `${request.method} ${request.url}`), ["GET https://api.test/v1/radar/leadsforge", "PUT https://api.test/v1/radar/leadsforge", "DELETE https://api.test/v1/radar/leadsforge"]);
-  assert.deepEqual(requests[1]!.body, { apiKey: "lf_live_key_1234" });
+test("no Leadsforge tool is offered, and the tool descriptions and instructions never mention it", async () => {
+  const { client } = await connect(() => new Response("{}"));
+  const tools = (await client.listTools()).tools;
+  assert.deepEqual(tools.map((tool) => tool.name).filter((name) => /leadsforge/i.test(name)), []);
+  assert.doesNotMatch(JSON.stringify(tools), /leadsforge/i);
+  assert.doesNotMatch(client.getInstructions() ?? "", /leadsforge/i);
+  assert.equal((await client.callTool({ name: "connect_leadsforge", arguments: { apiKey: "lf_live_key_1234" } })).isError, true);
 });
 
 test("list_radar_leads with after takes only new leads and returns the next cursor", async () => {
@@ -163,9 +157,9 @@ test("list_radar_leads with after takes only new leads and returns the next curs
   assert.match(listTool?.description ?? "", /cursor is account-wide.*same chatId for every page and next run/);
 });
 
-test("list_radar_leads marks leads that did not come from the web", async () => {
-  const { client } = await connect(() => new Response(JSON.stringify({ leads: [lead, { ...lead, id: "rld_2", email: "cto@initech.io", origin: "leadsforge" }] })));
+test("list_radar_leads marks leads the user added, and leads saved from Leadsforge before it was removed still list", async () => {
+  const { client } = await connect(() => new Response(JSON.stringify({ leads: [lead, { ...lead, id: "rld_2", email: "cto@initech.io", origin: "leadsforge" }, { ...lead, id: "rld_3", email: "me@acme.io", origin: "manual" }] })));
   const result = await client.callTool({ name: "list_radar_leads", arguments: {} });
-  assert.equal(text(result).split("\n")[1], "rld_2 cto@initech.io  Jane Doe · CTO · Acme (leadsforge)");
-  assert.equal(text(result).split("\n")[0]!.includes("(web)"), false);
+  assert.deepEqual(text(result).split("\n"), ["rld_1 jane@acme.io  Jane Doe · CTO · Acme", "rld_2 cto@initech.io  Jane Doe · CTO · Acme", "rld_3 me@acme.io  Jane Doe · CTO · Acme (manual)"]);
+  assert.deepEqual((result.structuredContent as { leads: Array<{ origin: string }> }).leads.map((entry) => entry.origin), ["web", "leadsforge", "manual"]);
 });

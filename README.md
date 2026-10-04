@@ -1,6 +1,6 @@
 # stormgtm-mcp
 
-Stdio MCP server for [StormGTM](https://stormgtm.com). It lets an agent qualify leads with Barometer before emailing them, then send from your own mailboxes.
+Stdio MCP server for [StormGTM](https://stormgtm.com). It lets an agent find leads with Radar and qualify them with Barometer. Sending is optional: the agent can send from mailboxes connected to StormGTM, or take the leads and send from its own tools.
 
 Requires Node.js 22+ and a StormGTM API key.
 
@@ -70,12 +70,9 @@ stormgtm skill install --claude   # or --cursor, --agents
 | `check_batch` | Submit many leads at once; unknown results are retried automatically |
 | `batch_status` | Progress and results for a batch |
 | `report_outcome` | Report `delivered`, `bounced`, `complained`, `replied` or `opened` so later checks improve. Free, and works for email sent outside StormGTM |
-| `find_leads` | Radar (beta): find people to email from a website URL or a description of the ideal customer (`request`, optional `chatId` to refine). 1 credit per new lead found on the web; Leadsforge leads and searches that find nobody are free. Can take a minute or two |
+| `find_leads` | Radar (beta): find people to email from a website URL or a description of the ideal customer (`request`, optional `chatId` to refine). 1 credit per new lead; searches that find nobody are free. Can take a minute or two |
 | `list_radar_leads` | Leads Radar saved, optionally for one `chatId`, with verdicts once qualified. With `after` (`"0"` first, then each `nextAfter`) it returns only leads not taken yet, oldest first |
 | `add_leads` | Save up to 500 of your own `leads` (email, optional name, title, company, note), free. Returns new leads, duplicates and rejections |
-| `leadsforge_status` | Whether a Leadsforge account is connected. When it is, `find_leads` also searches the Leadsforge people database, and those leads are free |
-| `connect_leadsforge` | Connect Leadsforge with the user's `apiKey`; checked, stored encrypted, never shown again |
-| `disconnect_leadsforge` | Remove the Leadsforge key |
 | `qualify_radar_leads` | Check Radar leads by `ids` (fast or deep `tier`) and store each verdict. Send only to `deliverable` |
 | `list_mailboxes` | Connected mailboxes with status, last test and daily cap |
 | `mailbox_status` | One mailbox: status, last test result, pause reason and today's capacity |
